@@ -16,6 +16,10 @@
 - Traders cannot utilize more than a configured percentage of the deposited liquidity.
 - Liquidity providers cannot withdraw liquidity that is reserved for positions.
 
+### misc
+
+- make position Id based on msg.sender nonce
+
 ## README
 
 - How does the system work? How would a user interact with it?
