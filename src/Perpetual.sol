@@ -70,8 +70,9 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         require(success, "Deposit failed!");
     }
     //@note: What if all the LPs withdraw all funds at the same time and leave no liquidity?
-    //TODO Limit withdrawals 
-    //withdrawal limit proportional to reserves 
+    //TODO Limit withdrawals
+    //withdrawal limit proportional to reserves
+
     function withdraw(uint256 amount) external whenNotPaused nonReentrant {
         require(amount <= lpBalances[msg.sender], "Not Enough Balance!");
         lpBalances[msg.sender] -= amount;
