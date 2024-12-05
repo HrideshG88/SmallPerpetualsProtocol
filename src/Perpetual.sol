@@ -32,6 +32,9 @@ struct Positions {
 }
 
 contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
+    event PositionOpened(address trader, PosType ptype);
+    event UpdatedPosition(address trader, PosType ptype, uint256 positionId);
+
     AggregatorV3Interface internal priceFeed;
 
     using SafeERC20 for IERC20;
@@ -44,6 +47,7 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
     uint256 public maxLeverage;
 
     uint256 minDeposits;
+    uint256 minCollateral;
 
     mapping(address => uint256) lpBalances;
 
@@ -51,9 +55,10 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
 
     mapping(address => mapping(uint256 => Positions)) traderPositions;
 
-    constructor(address _token) Ownable(msg.sender) {
+    constructor(address _token, uint256 _maxLeverage, uint256 _minCollateral) Ownable(msg.sender) {
         priceFeed = AggregatorV3Interface(0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43);
-        maxLeverage = 15;
+        maxLeverage = _maxLeverage;
+        minCollateral = _minCollateral;
         token = IERC20(_token);
     }
 
@@ -80,11 +85,73 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         require(success, "Withdraw failed!");
     }
 
-    function openPosition() external whenNotPaused nonReentrant {}
-    function updatePosition() external whenNotPaused nonReentrant {}
+    function openPosition(Positions calldata position) external whenNotPaused nonReentrant returns (uint256) {
+        uint256 nonce;
+        require(position.collateral >= minCollateral, "Collateral too low!");
+        uint256 leverage = position.size / position.collateral;
+        require(leverage <= maxLeverage, "Leverage too high!, reduce size or increase collateral");
+
+        //set positionId by sequential nonce
+        unchecked {
+            nonce++;
+        }
+        traderPositions[msg.sender][nonce] = position;
+
+        (bool success) = token.transferFrom(msg.sender, address(this), position.collateral);
+        require(success, "Cannot create Position");
+
+        emit PositionOpened(msg.sender, position.ptype);
+        return nonce;
+    }
+
+    function getPositions(address traders, uint256 nonce) public view returns (Positions memory) {
+        return traderPositions[traders][nonce];
+    }
+
+    function updatePositionCollateral(uint256 nonce, Positions calldata newPosition)
+        external
+        whenNotPaused
+        nonReentrant
+    {
+        Positions memory existingPos = getPositions(msg.sender, nonce);
+
+        require(newPosition.size == existingPos.size, "Nice try!");
+        require(newPosition.ptype == existingPos.ptype, "Nice try!");
+        require(newPosition.collateral != existingPos.collateral, "Update collateral and try again");
+
+        if (newPosition.collateral > existingPos.collateral) {
+            uint256 amount = newPosition.collateral - existingPos.collateral;
+
+            (bool success) = token.transferFrom(msg.sender, address(this), amount);
+            require(success, "can't Update Position");
+        }
+        if (newPosition.collateral < existingPos.collateral) {
+            uint256 amount = existingPos.collateral - newPosition.collateral;
+            token.safeTransfer(msg.sender, amount);
+        }
+        traderPositions[msg.sender][nonce] = newPosition;
+    }
+
+    function updatePositionSize(uint256 nonce, Positions calldata newPosition) external whenNotPaused nonReentrant {
+        Positions memory existingPos = getPositions(msg.sender, nonce);
+
+        require(newPosition.collateral == existingPos.collateral, "Nice try!");
+        require(newPosition.ptype == existingPos.ptype, "Nice try!");
+        require(newPosition.size != existingPos.size, "Update size and try again");
+
+        uint256 leverage = newPosition.size / existingPos.collateral;
+
+        if (newPosition.size > existingPos.size) {
+            require(leverage <= maxLeverage, "Leverage too high!");
+        }
+        traderPositions[msg.sender][nonce] = newPosition;
+    }
+
     function closePosition() external whenNotPaused nonReentrant {}
 
-    function _settlePositions() internal whenNotPaused {}
+    function _settlePositions() internal whenNotPaused {
+        //settlement logic
+    }
     function _liquidatePosition() internal whenNotPaused {}
 
     function calculatePnl() public view returns (int256) {}
