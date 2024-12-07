@@ -1,4 +1,4 @@
-## A protocol name
+## SmallPP
 
 ## Smart Contract(s) with the following functionalities,tests:
 
@@ -6,13 +6,13 @@
   - deposit()
   - withdraw()
 - A way to get the realtime price of the asset being traded.
-  - oracle()
+  - oracle() Chainlink
 - Traders can open a perpetual position for BTC, with a given size and collateral.
   - BTC speculation
 - Traders can increase the size of a perpetual position.
-  - updatePosition()
+  - updatePositionsize()
 - Traders can increase the collateral of a perpetual position.
-  - updatePosition()
+  - updatePositioncollateral()
 - Traders cannot utilize more than a configured percentage of the deposited liquidity.
 - Liquidity providers cannot withdraw liquidity that is reserved for positions.
 

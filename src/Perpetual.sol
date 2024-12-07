@@ -207,7 +207,10 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
             if (currentBtcPrice > posStartPrice) {}
             if (currentBtcPrice < posStartPrice) {}
         }
-        if (position.ptype == PosType.SHORT) {}
+        if (position.ptype == PosType.SHORT) {
+            if (currentBtcPrice > posStartPrice) {}
+            if (currentBtcPrice < posStartPrice) {}
+        }
     }
 
     function getBtcPrice() public view returns (int256) {
