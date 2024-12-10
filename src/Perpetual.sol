@@ -50,12 +50,14 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
     IERC20 internal token;
 
     uint256 public openInterest;
+    uint256 public tokenOpenInterest;
     uint256 public longOpenInterest;
     uint256 public shortOpenInterest;
     uint256 public maxLeverage;
 
     uint256 minDeposits;
     uint256 minCollateral;
+    int256 pnl;
 
     mapping(address => uint256) lpBalances;
 
@@ -111,6 +113,13 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         if (leverage > maxLeverage) {
             revert LeverageTooHigh(leverage, maxLeverage);
         }
+        openInterest += position.size;
+        if (position.ptype == PosType.LONG) {
+            longOpenInterest += position.size;
+        } else if (position.ptype == PosType.SHORT) {
+            shortOpenInterest += position.size;
+        }
+
         unchecked {
             nonce++;
         }
@@ -193,7 +202,7 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         return positionPrice[nonce];
     }
 
-    function calculatePnl(uint256 nonce, Positions calldata position) public view returns (int256) {
+    function calculatePnl(uint256 nonce, Positions calldata position) public returns (int256) {
         Positions memory existing = getPositions(msg.sender, nonce);
         if (
             existing.size != position.size && existing.collateral != position.collateral
@@ -204,7 +213,10 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         int256 currentBtcPrice = getBtcPrice();
         int256 posStartPrice = getPositionPrice(nonce);
         if (position.ptype == PosType.LONG) {
-            if (currentBtcPrice > posStartPrice) {}
+            if (currentBtcPrice > posStartPrice) {
+                //pnl = currentBtcPrice - int256(position.size);
+            }
+
             if (currentBtcPrice < posStartPrice) {}
         }
         if (position.ptype == PosType.SHORT) {
