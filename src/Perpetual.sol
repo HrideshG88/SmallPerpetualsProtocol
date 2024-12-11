@@ -215,7 +215,7 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         return positionPrice[nonce];
     }
 
-    function calculatePnl(uint256 nonce, Positions calldata position) public view returns (int256 pnl) {
+    function calculatePnl(uint256 nonce, Positions memory position) public returns (int256 pnl) {
         Positions memory existing = getPositions(msg.sender, nonce);
         if (
             existing.size != position.size && existing.collateral != position.collateral
@@ -245,6 +245,13 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
                 pnl = int256(position.size) - currentBtcPrice;
                 assert(pnl < 0);
                 return pnl;
+            }
+        }
+        if (pnl < 0) {
+            position.collateral -= uint256(pnl);
+            uint256 leverage = position.size / position.collateral;
+            if (leverage > maxLeverage) {
+                _liquidatePosition();
             }
         }
     }
