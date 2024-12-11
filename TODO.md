@@ -2,23 +2,23 @@
 
 ## Smart Contract(s) with the following functionalities,tests:
 
-- Liquidity Providers can deposit and withdraw liquidity.
-  - deposit()
-  - withdraw()
-- A way to get the realtime price of the asset being traded.
-  - oracle() Chainlink
-- Traders can open a perpetual position for BTC, with a given size and collateral.
+- [x] Liquidity Providers can deposit and withdraw liquidity.
+  - [x] deposit()
+  - [x] withdraw()
+- [x] A way to get the realtime price of the asset being traded.
+  - [x] oracle() Chainlink
+- [x] Traders can open a perpetual position for BTC, with a given size and collateral.
   - BTC speculation
-- Traders can increase the size of a perpetual position.
-  - updatePositionsize()
-- Traders can increase the collateral of a perpetual position.
-  - updatePositioncollateral()
-- Traders cannot utilize more than a configured percentage of the deposited liquidity.
-- Liquidity providers cannot withdraw liquidity that is reserved for positions.
+- [x] Traders can increase the size of a perpetual position.
+  - [x] updatePositionsize()
+- [x] Traders can increase the collateral of a perpetual position.
+  - [x] updatePositioncollateral()
+- [x] Traders cannot utilize more than a configured percentage of the deposited liquidity.
+- [x] Liquidity providers cannot withdraw liquidity that is reserved for positions.
 
-### misc
+## misc
 
-- make position Id based on msg.sender nonce
+- [-] Recheck and fix decimals
 
 ## README
 

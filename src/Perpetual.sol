@@ -37,6 +37,7 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
 
     error lessThanMinDeposits(uint256 amount, uint256 minDeposits);
     error InsufficientBalance(uint256);
+    error InsufficientPoolReserves(uint256, int256);
     error LeverageTooHigh(uint256, uint256 maxLeverage);
     error CollateralTooLow(uint256, uint256 minCollateral);
     error NonUpdateParametersChanged(Positions);
@@ -47,17 +48,18 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
 
     using SafeERC20 for IERC20;
 
-    IERC20 internal token;
+    IERC20 internal immutable token;
 
-    uint256 public openInterest;
-    uint256 public tokenOpenInterest;
-    uint256 public longOpenInterest;
-    uint256 public shortOpenInterest;
+    int256 public tokenOpenInterest;
+    int256 public longOpenInterest;
+    int256 public shortOpenInterest;
+    int256 public openInterest = longOpenInterest + shortOpenInterest;
     uint256 public maxLeverage;
+
+    uint256 lpReserve;
 
     uint256 minDeposits;
     uint256 minCollateral;
-    int256 pnl;
 
     mapping(address => uint256) lpBalances;
 
@@ -66,10 +68,10 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
     //@notice BtcPrice to Position to nonce
     mapping(uint256 => int256) positionPrice;
 
-    constructor(address _token, uint256 _maxLeverage, uint256 _minCollateral, uint256 _minDeposits)
+    constructor(address _token, uint256 _maxLeverage, uint256 _minCollateral, uint256 _minDeposits, address _priceFeed)
         Ownable(msg.sender)
     {
-        priceFeed = AggregatorV3Interface(0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43);
+        priceFeed = AggregatorV3Interface(_priceFeed);
         maxLeverage = _maxLeverage;
         minCollateral = _minCollateral;
         minDeposits = _minDeposits;
@@ -83,22 +85,21 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
     function viewFees() public view returns (uint256) {}
 
     function deposit(uint256 amount) external whenNotPaused nonReentrant {
-        if (amount < minDeposits) {
-            revert lessThanMinDeposits(amount, minDeposits);
-        }
+        if (amount < minDeposits) revert lessThanMinDeposits(amount, minDeposits);
+
         lpBalances[msg.sender] += amount;
+
         (bool success) = token.transferFrom(msg.sender, address(this), amount);
         require(success, "Deposit failed!");
     }
-    //@note: What if all the LPs withdraw all funds at the same time and leave no liquidity?
-    //TODO Limit withdrawals
-    //withdrawal limit proportional to reserves
 
     function withdraw(uint256 amount) external whenNotPaused nonReentrant {
-        if (amount >= lpBalances[msg.sender]) {
-            revert InsufficientBalance(amount);
-        }
+        if (amount >= lpBalances[msg.sender]) revert InsufficientBalance(amount);
         lpBalances[msg.sender] -= amount;
+
+        lpReserve = token.balanceOf(address(this));
+        if (openInterest > int256(lpReserve * 80 / 100)) revert InsufficientPoolReserves(lpReserve, openInterest);
+
         (bool success) = token.transfer(msg.sender, amount);
         require(success, "Withdraw failed!");
     }
@@ -113,12 +114,15 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         if (leverage > maxLeverage) {
             revert LeverageTooHigh(leverage, maxLeverage);
         }
-        openInterest += position.size;
+
         if (position.ptype == PosType.LONG) {
-            longOpenInterest += position.size;
+            longOpenInterest += int256(position.size);
         } else if (position.ptype == PosType.SHORT) {
-            shortOpenInterest += position.size;
+            shortOpenInterest += int256(position.size);
         }
+
+        lpReserve = token.balanceOf(address(this));
+        if (openInterest > int256(lpReserve * 80 / 100)) revert InsufficientPoolReserves(lpReserve, openInterest);
 
         unchecked {
             nonce++;
@@ -188,6 +192,15 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         if (newPosition.size > existingPos.size) {
             require(leverage <= maxLeverage, "Leverage too high!");
         }
+
+        int256 sizeDiff = int256(newPosition.size - existingPos.size);
+
+        if (newPosition.ptype == PosType.LONG) {
+            longOpenInterest += sizeDiff;
+        } else if (newPosition.ptype == PosType.SHORT) {
+            shortOpenInterest += sizeDiff;
+        }
+
         traderPositions[msg.sender][nonce] = newPosition;
     }
 
@@ -202,7 +215,7 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         return positionPrice[nonce];
     }
 
-    function calculatePnl(uint256 nonce, Positions calldata position) public returns (int256) {
+    function calculatePnl(uint256 nonce, Positions calldata position) public view returns (int256 pnl) {
         Positions memory existing = getPositions(msg.sender, nonce);
         if (
             existing.size != position.size && existing.collateral != position.collateral
@@ -213,16 +226,32 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         int256 currentBtcPrice = getBtcPrice();
         int256 posStartPrice = getPositionPrice(nonce);
         if (position.ptype == PosType.LONG) {
-            if (currentBtcPrice > posStartPrice) {
-                //pnl = currentBtcPrice - int256(position.size);
+            if (posStartPrice <= currentBtcPrice) {
+                pnl = currentBtcPrice - int256(position.size);
+                assert(pnl >= 0);
+                return pnl;
+            } else if (posStartPrice > currentBtcPrice) {
+                pnl = currentBtcPrice - int256(position.size);
+                assert(pnl < 0);
+                return pnl;
             }
-
-            if (currentBtcPrice < posStartPrice) {}
         }
         if (position.ptype == PosType.SHORT) {
-            if (currentBtcPrice > posStartPrice) {}
-            if (currentBtcPrice < posStartPrice) {}
+            if (posStartPrice >= currentBtcPrice) {
+                pnl = int256(position.size) - currentBtcPrice;
+                assert(pnl >= 0);
+                return pnl;
+            } else if (posStartPrice < currentBtcPrice) {
+                pnl = int256(position.size) - currentBtcPrice;
+                assert(pnl < 0);
+                return pnl;
+            }
         }
+    }
+
+    function getOpenInterestinTokens() public returns (int256) {
+        int256 btcPrice = getBtcPrice();
+        return tokenOpenInterest = btcPrice / openInterest;
     }
 
     function getBtcPrice() public view returns (int256) {
