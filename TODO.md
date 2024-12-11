@@ -19,6 +19,8 @@
 ## misc
 
 - [-] Recheck and fix decimals
+- [-] \_liquidate() function
+- [-] tests
 
 ## README
 
