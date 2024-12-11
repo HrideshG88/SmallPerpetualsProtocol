@@ -8,7 +8,7 @@
 - [x] A way to get the realtime price of the asset being traded.
   - [x] oracle() Chainlink
 - [x] Traders can open a perpetual position for BTC, with a given size and collateral.
-  - BTC speculation
+  - [x] BTC speculation
 - [x] Traders can increase the size of a perpetual position.
   - [x] updatePositionsize()
 - [x] Traders can increase the collateral of a perpetual position.
