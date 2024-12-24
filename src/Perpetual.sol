@@ -34,7 +34,7 @@ struct Positions {
 }
 
 contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
-    event PositionOpened(address trader, PosType ptype);
+    event PositionOpened(address trader, PosType ptype, uint256);
     event UpdatedPosition(address trader, PosType ptype, uint256 positionId);
 
     error lessThanMinDeposits(uint256 amount, uint256 minDeposits);
@@ -64,7 +64,7 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
     uint256 minDeposits;
     uint256 minCollateral;
 
-    uint256 liquidatorFee;
+    //uint256 liquidatorFee;
 
     mapping(address => uint256) lpBalances;
 
@@ -143,7 +143,7 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         (bool success) = token.transferFrom(msg.sender, address(this), position.collateral);
         require(success, "Cannot create Position");
 
-        emit PositionOpened(msg.sender, position.ptype);
+        emit PositionOpened(msg.sender, position.ptype, nonce);
         return nonce;
     }
 
@@ -158,10 +158,10 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
     {
         Positions memory existingPos = getPositions(msg.sender, nonce);
 
-        if (newPosition.size != existingPos.size) revert NonUpdateParametersChanged(newPosition);
-        if (newPosition.ptype != existingPos.ptype) revert NonUpdateParametersChanged(newPosition);
-        if (newPosition.sizeInTokens != existingPos.sizeInTokens) revert NonUpdateParametersChanged(newPosition);
-        if (newPosition.active != true) revert NonUpdateParametersChanged(newPosition);
+        if (
+            newPosition.size != existingPos.size && newPosition.ptype != existingPos.ptype
+                && newPosition.sizeInTokens != existingPos.sizeInTokens && newPosition.active != true
+        ) revert NonUpdateParametersChanged(newPosition);
 
         if (newPosition.collateral == existingPos.collateral) revert UpdateParameterNotChanged(newPosition);
 
@@ -185,10 +185,11 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
     function updatePositionSize(uint256 nonce, Positions memory newPosition) external whenNotPaused nonReentrant {
         Positions memory existingPos = getPositions(msg.sender, nonce);
 
-        if (newPosition.collateral != existingPos.collateral) revert NonUpdateParametersChanged(newPosition);
-        if (newPosition.ptype != existingPos.ptype) revert NonUpdateParametersChanged(newPosition);
+        if (
+            newPosition.collateral != existingPos.collateral && newPosition.ptype != existingPos.ptype
+                && newPosition.active != true
+        ) revert NonUpdateParametersChanged(newPosition);
         if (newPosition.size == existingPos.size) revert UpdateParameterNotChanged(newPosition);
-        if (newPosition.active != true) revert NonUpdateParametersChanged(newPosition);
 
         uint256 leverage = newPosition.size / existingPos.collateral;
 
@@ -220,7 +221,24 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
     //function _settlePositions() internal whenNotPaused {
     //    //settlement logic
     //}
-    function _liquidatePosition() internal whenNotPaused {}
+    function liquidatePosition(uint256 nonce, address trader) external whenNotPaused {
+        Positions memory position = getPositions(trader, nonce);
+        int256 pnl = calculatePnl(nonce, position);
+        if (pnl < 0) {
+            position.collateral - uint256(pnl);
+            uint256 leverage = position.size / position.collateral;
+            if (leverage > maxLeverage) {
+                position.size = 0;
+                uint256 liquidatorFee = (position.collateral * 10 / 100);
+                lpReserve += position.collateral - liquidatorFee;
+                position.collateral = 0;
+                position.sizeInTokens = 0;
+                position.active = false;
+                delete traderPositions[trader][nonce];
+                token.safeTransfer(msg.sender, liquidatorFee);
+            }
+        }
+    }
 
     function _closePosition(uint256 nonce, Positions memory position, int256 sizeDiff) internal whenNotPaused {
         _decreasePositionSize(nonce, position, sizeDiff);
@@ -278,13 +296,6 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
                 pnl = int256(position.size) - currentBtcPrice;
                 assert(pnl < 0);
                 return pnl;
-            }
-        }
-        if (pnl < 0) {
-            position.collateral -= uint256(pnl);
-            uint256 leverage = position.size / position.collateral;
-            if (leverage > maxLeverage) {
-                _liquidatePosition();
             }
         }
     }
