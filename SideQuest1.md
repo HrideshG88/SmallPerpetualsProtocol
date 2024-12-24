@@ -7,7 +7,7 @@ store value `0x23b872dd000000000000000000000000` at location`0x0c (12)`
 
 ##### Q2 In the `safeTransferFrom` function, why is `shl` used on line 191 to shift the `from` to the left by 96 bits?
 
-move `from address` value from `0x2c` to `0x20` next to function signature at `0x1c`
+move `from address` value to `0x2c` next to function signature at `0x1c` and eliminate dirty bytes.
 
 #
 

@@ -28,6 +28,8 @@ enum PosType {
 struct Positions {
     uint256 collateral;
     uint256 size;
+    int256 sizeInTokens;
+    bool active;
     PosType ptype;
 }
 
@@ -56,10 +58,13 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
     int256 public openInterest = longOpenInterest + shortOpenInterest;
     uint256 public maxLeverage;
 
+    int256 realizedPnL;
     uint256 lpReserve;
 
     uint256 minDeposits;
     uint256 minCollateral;
+
+    uint256 liquidatorFee;
 
     mapping(address => uint256) lpBalances;
 
@@ -88,6 +93,7 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         if (amount < minDeposits) revert lessThanMinDeposits(amount, minDeposits);
 
         lpBalances[msg.sender] += amount;
+        lpReserve += amount;
 
         (bool success) = token.transferFrom(msg.sender, address(this), amount);
         require(success, "Deposit failed!");
@@ -97,23 +103,20 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         if (amount >= lpBalances[msg.sender]) revert InsufficientBalance(amount);
         lpBalances[msg.sender] -= amount;
 
-        lpReserve = token.balanceOf(address(this));
         if (openInterest > int256(lpReserve * 80 / 100)) revert InsufficientPoolReserves(lpReserve, openInterest);
+        lpReserve -= amount;
 
         (bool success) = token.transfer(msg.sender, amount);
         require(success, "Withdraw failed!");
     }
 
-    function openPosition(Positions calldata position) external whenNotPaused nonReentrant returns (uint256) {
+    function openPosition(Positions memory position) external whenNotPaused nonReentrant returns (uint256) {
         uint256 nonce;
-        if (position.collateral > minCollateral) {
-            revert CollateralTooLow(position.collateral, minCollateral);
-        }
+        if (position.collateral > minCollateral) revert CollateralTooLow(position.collateral, minCollateral);
+
         uint256 leverage = position.size / position.collateral;
 
-        if (leverage > maxLeverage) {
-            revert LeverageTooHigh(leverage, maxLeverage);
-        }
+        if (leverage > maxLeverage) revert LeverageTooHigh(leverage, maxLeverage);
 
         if (position.ptype == PosType.LONG) {
             longOpenInterest += int256(position.size);
@@ -121,7 +124,6 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
             shortOpenInterest += int256(position.size);
         }
 
-        lpReserve = token.balanceOf(address(this));
         if (openInterest > int256(lpReserve * 80 / 100)) revert InsufficientPoolReserves(lpReserve, openInterest);
 
         unchecked {
@@ -132,6 +134,11 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
 
         int256 btcPrice = getBtcPrice();
         positionPrice[nonce] = btcPrice;
+
+        position.sizeInTokens = int256(position.size) / btcPrice;
+        tokenOpenInterest = openInterest / btcPrice;
+
+        position.active = true;
 
         (bool success) = token.transferFrom(msg.sender, address(this), position.collateral);
         require(success, "Cannot create Position");
@@ -151,15 +158,15 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
     {
         Positions memory existingPos = getPositions(msg.sender, nonce);
 
-        if (newPosition.size != existingPos.size) {
-            revert NonUpdateParametersChanged(newPosition);
-        }
-        if (newPosition.ptype != existingPos.ptype) {
-            revert NonUpdateParametersChanged(newPosition);
-        }
-        if (newPosition.collateral == existingPos.collateral) {
-            revert UpdateParameterNotChanged(newPosition);
-        }
+        if (newPosition.size != existingPos.size) revert NonUpdateParametersChanged(newPosition);
+        if (newPosition.ptype != existingPos.ptype) revert NonUpdateParametersChanged(newPosition);
+        if (newPosition.sizeInTokens != existingPos.sizeInTokens) revert NonUpdateParametersChanged(newPosition);
+        if (newPosition.active != true) revert NonUpdateParametersChanged(newPosition);
+
+        if (newPosition.collateral == existingPos.collateral) revert UpdateParameterNotChanged(newPosition);
+
+        uint256 leverage = existingPos.size / newPosition.collateral;
+        if (leverage > maxLeverage) revert LeverageTooHigh(leverage, maxLeverage);
 
         if (newPosition.collateral > existingPos.collateral) {
             uint256 amount = newPosition.collateral - existingPos.collateral;
@@ -171,29 +178,29 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
             uint256 amount = existingPos.collateral - newPosition.collateral;
             token.safeTransfer(msg.sender, amount);
         }
+
         traderPositions[msg.sender][nonce] = newPosition;
     }
 
-    function updatePositionSize(uint256 nonce, Positions calldata newPosition) external whenNotPaused nonReentrant {
+    function updatePositionSize(uint256 nonce, Positions memory newPosition) external whenNotPaused nonReentrant {
         Positions memory existingPos = getPositions(msg.sender, nonce);
 
-        if (newPosition.collateral != existingPos.collateral) {
-            revert NonUpdateParametersChanged(newPosition);
-        }
-        if (newPosition.ptype != existingPos.ptype) {
-            revert NonUpdateParametersChanged(newPosition);
-        }
-        if (newPosition.size == existingPos.size) {
-            revert UpdateParameterNotChanged(newPosition);
-        }
+        if (newPosition.collateral != existingPos.collateral) revert NonUpdateParametersChanged(newPosition);
+        if (newPosition.ptype != existingPos.ptype) revert NonUpdateParametersChanged(newPosition);
+        if (newPosition.size == existingPos.size) revert UpdateParameterNotChanged(newPosition);
+        if (newPosition.active != true) revert NonUpdateParametersChanged(newPosition);
 
         uint256 leverage = newPosition.size / existingPos.collateral;
 
-        if (newPosition.size > existingPos.size) {
-            require(leverage <= maxLeverage, "Leverage too high!");
-        }
+        if (newPosition.size > existingPos.size) revert LeverageTooHigh(leverage, maxLeverage);
 
         int256 sizeDiff = int256(newPosition.size - existingPos.size);
+
+        if (newPosition.size == 0) {
+            _closePosition(nonce, existingPos, sizeDiff);
+        } else if (newPosition.size < existingPos.size) {
+            _decreasePositionSize(nonce, newPosition, sizeDiff);
+        }
 
         if (newPosition.ptype == PosType.LONG) {
             longOpenInterest += sizeDiff;
@@ -201,15 +208,41 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
             shortOpenInterest += sizeDiff;
         }
 
+        if (openInterest > int256(lpReserve * 80 / 100)) revert InsufficientPoolReserves(lpReserve, openInterest);
+
+        int256 btcPrice = getBtcPrice();
+        newPosition.sizeInTokens = int256(newPosition.size) / btcPrice;
+        tokenOpenInterest = openInterest / btcPrice;
+
         traderPositions[msg.sender][nonce] = newPosition;
     }
 
-    function closePosition(uint256 nonce, Positions calldata position) external whenNotPaused nonReentrant {}
-
-    function _settlePositions() internal whenNotPaused {
-        //settlement logic
-    }
+    //function _settlePositions() internal whenNotPaused {
+    //    //settlement logic
+    //}
     function _liquidatePosition() internal whenNotPaused {}
+
+    function _closePosition(uint256 nonce, Positions memory position, int256 sizeDiff) internal whenNotPaused {
+        _decreasePositionSize(nonce, position, sizeDiff);
+        position.active = false;
+        delete traderPositions[msg.sender][nonce];
+    }
+
+    //TODO Add Fees
+    function _decreasePositionSize(uint256 nonce, Positions memory position, int256 sizeDiff) internal whenNotPaused {
+        int256 totalPnl = calculatePnl(nonce, position);
+        realizedPnL = totalPnl - sizeDiff / int256(position.size);
+        if (realizedPnL > 0) {
+            if (openInterest - realizedPnL < int256(lpReserve * 80 / 100)) {
+                revert InsufficientPoolReserves(lpReserve, openInterest);
+            }
+            token.safeTransfer(msg.sender, uint256(realizedPnL));
+        }
+        if (realizedPnL <= 0) {
+            position.collateral - uint256(realizedPnL);
+            lpReserve + uint256(realizedPnL);
+        }
+    }
 
     function getPositionPrice(uint256 nonce) public view returns (int256) {
         return positionPrice[nonce];
