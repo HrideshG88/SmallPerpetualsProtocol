@@ -64,6 +64,8 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
     uint256 minDeposits;
     uint256 minCollateral;
 
+    uint256 liquidatorFee;
+
     mapping(address => uint256) lpBalances;
 
     //@notice positionid to positions to traders
@@ -231,6 +233,9 @@ contract Perpetuals is Ownable, Pausable, ReentrancyGuard {
         int256 totalPnl = calculatePnl(nonce, position);
         realizedPnL = totalPnl - sizeDiff / int256(position.size);
         if (realizedPnL > 0) {
+            if (openInterest - realizedPnL < int256(lpReserve * 80 / 100)) {
+                revert InsufficientPoolReserves(lpReserve, openInterest);
+            }
             token.safeTransfer(msg.sender, uint256(realizedPnL));
         }
         if (realizedPnL <= 0) {
